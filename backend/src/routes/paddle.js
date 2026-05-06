@@ -9,6 +9,29 @@ const PADDLE_API_URL = process.env.PADDLE_ENV === 'sandbox'
   ? 'https://sandbox-api.paddle.com'
   : 'https://api.paddle.com'
 
+function paddleHeaders() {
+  return {
+    Authorization: `Bearer ${process.env.PADDLE_API_KEY}`,
+    'Content-Type': 'application/json'
+  }
+}
+
+async function paddleRequest(path, options = {}) {
+  const response = await fetch(`${PADDLE_API_URL}${path}`, {
+    ...options,
+    headers: {
+      ...paddleHeaders(),
+      ...(options.headers ?? {})
+    }
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const message = data?.error?.detail || data?.error?.message || 'Paddle API request failed'
+    throw new Error(message)
+  }
+  return data
+}
+
 // POST /paddle/checkout
 router.post('/checkout', requireAuth, async (req, res) => {
   if (!process.env.PADDLE_API_KEY || !process.env.PADDLE_PRICE_ID) {
@@ -20,10 +43,7 @@ router.post('/checkout', requireAuth, async (req, res) => {
   try {
     const response = await fetch(`${PADDLE_API_URL}/transactions`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.PADDLE_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
+      headers: paddleHeaders(),
       body: JSON.stringify({
         items: [{ price_id: process.env.PADDLE_PRICE_ID, quantity: 1 }],
         customer: { email: req.user.email },
@@ -46,6 +66,42 @@ router.post('/checkout', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Paddle checkout error:', err)
     res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+// POST /paddle/subscription/cancel
+router.post('/subscription/cancel', requireAuth, async (req, res) => {
+  if (!process.env.PADDLE_API_KEY) {
+    return res.status(503).json({ error: 'Payments not configured' })
+  }
+
+  try {
+    const encodedEmail = encodeURIComponent(req.user.email)
+    const customers = await paddleRequest(`/customers?email=${encodedEmail}&per_page=50`)
+    const customer = customers?.data?.find((item) => item?.email?.toLowerCase() === req.user.email?.toLowerCase())
+
+    if (!customer?.id) {
+      return res.status(404).json({ error: 'No billing customer found for this account' })
+    }
+
+    const subscriptions = await paddleRequest(
+      `/subscriptions?customer_id=${encodeURIComponent(customer.id)}&status=active,trialing,past_due&per_page=200`
+    )
+
+    const subscription = subscriptions?.data?.find((item) => item?.status !== 'canceled')
+    if (!subscription?.id) {
+      return res.status(404).json({ error: 'No active subscription found' })
+    }
+
+    await paddleRequest(`/subscriptions/${subscription.id}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ effective_from: 'next_billing_period' })
+    })
+
+    return res.json({ success: true, subscription_id: subscription.id })
+  } catch (err) {
+    console.error('Paddle cancel subscription error:', err)
+    return res.status(500).json({ error: err.message || 'Failed to cancel subscription' })
   }
 })
 

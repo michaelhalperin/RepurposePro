@@ -8,24 +8,30 @@ import LoadingScreen from './components/LoadingScreen'
 import ResultsScreen from './components/ResultsScreen'
 import ProfileScreen from './components/ProfileScreen'
 import SavedScreen from './components/SavedScreen'
+import PublicPage from './components/PublicPage'
 import HistoryPanel from './components/HistoryPanel'
 import UpgradeModal from './components/UpgradeModal'
 import { generate, getUsage, getHistory, deleteGeneration, getSaved, saveItem, unsaveItem } from './lib/api'
 import { initPaddle } from './lib/paddle'
 import repurposeProLogo from './assets/repurposepro-logo.png'
 
-const PATHS = ['/', '/results', '/profile', '/saved']
+const APP_PATHS = ['/', '/results', '/profile', '/saved']
+const PUBLIC_PATHS = ['/pricing', '/terms', '/privacy', '/refund-policy']
+const PATHS = [...APP_PATHS, ...PUBLIC_PATHS]
 
 function AppInner() {
   const { user, loading: authLoading, signInWithGoogle, signOut } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+  const isPublicPage = PUBLIC_PATHS.includes(location.pathname)
 
   const view =
     location.pathname === '/results'
       ? 'results'
       : location.pathname === '/profile'
         ? 'profile'
+        : isPublicPage
+          ? 'profile'
         : location.pathname === '/saved'
           ? 'saved'
           : 'create'
@@ -69,10 +75,10 @@ function AppInner() {
     if (user) return
     setUsage(null)
     setOutput(null)
-    if (!authLoading && location.pathname !== '/') {
+    if (!authLoading && location.pathname !== '/' && !isPublicPage) {
       navigate('/', { replace: true })
     }
-  }, [user, authLoading, location.pathname, navigate])
+  }, [user, authLoading, location.pathname, navigate, isPublicPage])
 
   // Signed in: load usage, handle Paddle redirect
   useEffect(() => {
@@ -221,7 +227,9 @@ function AppInner() {
       )}
       <main className="main" ref={mainRef} aria-busy={loading}>
         <img className="main-logo" src={repurposeProLogo} alt="RepurposePro" />
-        {loading ? (
+        {isPublicPage ? (
+          <PublicPage path={location.pathname} usage={usage} />
+        ) : loading ? (
           <LoadingScreen />
         ) : view === 'create' ? (
           <InputScreen

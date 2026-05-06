@@ -91,3 +91,13 @@ export async function createCheckout() {
   if (!res.ok) throw new Error(data.error || 'Failed to create checkout')
   return data
 }
+
+export async function cancelSubscription() {
+  const res = await fetch('/api/paddle/subscription/cancel', {
+    method: 'POST',
+    headers: await authHeaders()
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to cancel subscription')
+  return data
+}
