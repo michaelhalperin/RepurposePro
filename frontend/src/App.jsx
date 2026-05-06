@@ -11,7 +11,7 @@ import SavedScreen from './components/SavedScreen'
 import PublicPage from './components/PublicPage'
 import HistoryPanel from './components/HistoryPanel'
 import UpgradeModal from './components/UpgradeModal'
-import { generate, getUsage, getHistory, deleteGeneration, getSaved, saveItem, unsaveItem } from './lib/api'
+import { generate, getUsage, getHistory, deleteGeneration, updateGeneration, getSaved, saveItem, unsaveItem } from './lib/api'
 import { initPaddle } from './lib/paddle'
 import repurposeProLogo from './assets/repurposepro-logo.png'
 
@@ -188,6 +188,19 @@ function AppInner() {
     }
   }
 
+  async function handlePersistOutput(nextOutput) {
+    if (!currentGenerationId) {
+      throw new Error('No generation selected to save')
+    }
+    await updateGeneration(currentGenerationId, nextOutput)
+    setOutput(nextOutput)
+    setHistory(prev =>
+      prev?.map(item =>
+        item.id === currentGenerationId ? { ...item, output_json: nextOutput } : item
+      ) ?? prev
+    )
+  }
+
   function pathForView(v) {
     if (v === 'results') return '/results'
     if (v === 'profile') return '/profile'
@@ -244,6 +257,7 @@ function AppInner() {
           <ResultsScreen
             output={output}
             onOutputChange={setOutput}
+            onPersistOutput={handlePersistOutput}
             onDelete={handleDeleteResults}
             deleting={deletingResults}
             savedItems={savedItems}

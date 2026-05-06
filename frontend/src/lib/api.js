@@ -43,6 +43,17 @@ export async function deleteGeneration(id) {
   if (!res.ok) throw new Error(data.error || 'Failed to delete generation')
 }
 
+export async function updateGeneration(id, outputJson) {
+  const res = await fetch(`/api/history/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: await authHeaders(),
+    body: JSON.stringify({ output_json: outputJson })
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || 'Failed to update generation')
+  return data
+}
+
 export async function deleteAccount() {
   const res = await fetch('/api/account', {
     method: 'DELETE',

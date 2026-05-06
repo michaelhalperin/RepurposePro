@@ -29,3 +29,24 @@ router.delete('/:id', requireAuth, async (req, res) => {
   if (!data?.length) return res.status(404).json({ error: 'Generation not found' })
   res.status(204).send()
 })
+
+router.patch('/:id', requireAuth, async (req, res) => {
+  const id = req.params.id
+  const { output_json } = req.body ?? {}
+
+  if (!output_json || typeof output_json !== 'object') {
+    return res.status(400).json({ error: 'output_json object is required' })
+  }
+
+  const { data, error } = await supabase
+    .from('generations')
+    .update({ output_json })
+    .eq('id', id)
+    .eq('user_id', req.user.id)
+    .select('id, output_json')
+    .single()
+
+  if (error) return res.status(500).json({ error: 'Failed to update generation' })
+  if (!data) return res.status(404).json({ error: 'Generation not found' })
+  res.json(data)
+})
