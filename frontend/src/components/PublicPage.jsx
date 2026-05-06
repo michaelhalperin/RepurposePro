@@ -1,7 +1,11 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import gsap from "gsap";
 import { useAuth } from "../context/AuthContext";
-import { cancelSubscription, createCheckout } from "../lib/api";
+import {
+  cancelSubscription,
+  createCheckout,
+  getSubscriptionStatus,
+} from "../lib/api";
 import { openPaddleCheckout } from "../lib/paddle";
 
 const PAGE_CONTENT = {
@@ -208,10 +212,15 @@ export default function PublicPage({ path, usage }) {
   const containerRef = useRef(null);
   const [loadingCheckout, setLoadingCheckout] = useState(false);
   const [loadingCancel, setLoadingCancel] = useState(false);
+  const [loadingSubscriptionStatus, setLoadingSubscriptionStatus] =
+    useState(false);
   const [checkoutError, setCheckoutError] = useState(null);
   const [cancelMessage, setCancelMessage] = useState(null);
+  const [cancelScheduled, setCancelScheduled] = useState(false);
   const isCheckingSubscription = !!user && path === "/pricing" && !usage;
   const hasProPlan = usage?.plan === "pro";
+  const disableCancelButton =
+    loadingCancel || loadingSubscriptionStatus || cancelScheduled;
   const content = PAGE_CONTENT[path];
   if (!content) return null;
 
@@ -246,6 +255,33 @@ export default function PublicPage({ path, usage }) {
     return () => ctx.revert();
   }, [path]);
 
+  useEffect(() => {
+    if (path !== "/pricing" || !user || !hasProPlan) {
+      setCancelScheduled(false);
+      return;
+    }
+
+    let ignore = false;
+    setLoadingSubscriptionStatus(true);
+    getSubscriptionStatus()
+      .then((status) => {
+        if (ignore) return;
+        setCancelScheduled(Boolean(status?.is_cancel_scheduled));
+      })
+      .catch(() => {
+        if (ignore) return;
+        setCancelScheduled(false);
+      })
+      .finally(() => {
+        if (ignore) return;
+        setLoadingSubscriptionStatus(false);
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [path, user, hasProPlan]);
+
   async function handleCheckout() {
     setLoadingCheckout(true);
     setCheckoutError(null);
@@ -272,9 +308,12 @@ export default function PublicPage({ path, usage }) {
     setCheckoutError(null);
     setCancelMessage(null);
     try {
-      await cancelSubscription();
+      const result = await cancelSubscription();
+      setCancelScheduled(true);
       setCancelMessage(
-        "Your subscription will be canceled at the end of the current billing period.",
+        result?.already_scheduled
+          ? "Cancellation is already scheduled for the end of your current billing period."
+          : "Your subscription will be canceled at the end of the current billing period.",
       );
     } catch (err) {
       setCheckoutError(
@@ -337,14 +376,20 @@ export default function PublicPage({ path, usage }) {
                 <button
                   className="btn-ghost btn-full"
                   onClick={handleCancelSubscription}
-                  disabled={loadingCancel}
+                  disabled={disableCancelButton}
                 >
-                  {loadingCancel
+                  {loadingSubscriptionStatus
+                    ? "Checking status..."
+                    : loadingCancel
                     ? "Cancelling subscription..."
+                    : cancelScheduled
+                      ? "Cancellation scheduled"
                     : "Cancel subscription"}
                 </button>
                 <p className="public-pricing-cancel-note">
-                  Cancel in-app without leaving this site.
+                  {cancelScheduled
+                    ? "Cancellation already scheduled. Your Pro access stays active until the current billing period ends."
+                    : "Cancel in-app without leaving this site."}
                 </p>
               </>
             )}

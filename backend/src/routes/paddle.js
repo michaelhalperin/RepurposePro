@@ -32,6 +32,18 @@ async function paddleRequest(path, options = {}) {
   return data
 }
 
+function isCancelScheduled(subscription) {
+  return subscription?.scheduled_change?.action === 'cancel'
+}
+
+function scheduledCancelAt(subscription) {
+  return (
+    subscription?.scheduled_change?.effective_at ||
+    subscription?.scheduled_change?.effective_from ||
+    null
+  )
+}
+
 // POST /paddle/checkout
 router.post('/checkout', requireAuth, async (req, res) => {
   if (!process.env.PADDLE_API_KEY || !process.env.PADDLE_PRICE_ID) {
@@ -93,15 +105,79 @@ router.post('/subscription/cancel', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'No active subscription found' })
     }
 
+    if (isCancelScheduled(subscription)) {
+      return res.json({
+        success: true,
+        subscription_id: subscription.id,
+        already_scheduled: true,
+        cancel_effective_at: scheduledCancelAt(subscription)
+      })
+    }
+
     await paddleRequest(`/subscriptions/${subscription.id}/cancel`, {
       method: 'POST',
       body: JSON.stringify({ effective_from: 'next_billing_period' })
     })
 
-    return res.json({ success: true, subscription_id: subscription.id })
+    const refreshed = await paddleRequest(`/subscriptions/${subscription.id}`)
+    const refreshedSubscription = refreshed?.data ?? null
+
+    return res.json({
+      success: true,
+      subscription_id: subscription.id,
+      already_scheduled: isCancelScheduled(refreshedSubscription),
+      cancel_effective_at: scheduledCancelAt(refreshedSubscription)
+    })
   } catch (err) {
     console.error('Paddle cancel subscription error:', err)
     return res.status(500).json({ error: err.message || 'Failed to cancel subscription' })
+  }
+})
+
+// GET /paddle/subscription/status
+router.get('/subscription/status', requireAuth, async (req, res) => {
+  if (!process.env.PADDLE_API_KEY) {
+    return res.status(503).json({ error: 'Payments not configured' })
+  }
+
+  try {
+    const encodedEmail = encodeURIComponent(req.user.email)
+    const customers = await paddleRequest(`/customers?email=${encodedEmail}&per_page=50`)
+    const customer = customers?.data?.find((item) => item?.email?.toLowerCase() === req.user.email?.toLowerCase())
+
+    if (!customer?.id) {
+      return res.json({
+        has_active_subscription: false,
+        is_cancel_scheduled: false,
+        cancel_effective_at: null,
+        status: null
+      })
+    }
+
+    const subscriptions = await paddleRequest(
+      `/subscriptions?customer_id=${encodeURIComponent(customer.id)}&status=active,trialing,past_due&per_page=200`
+    )
+
+    const subscription = subscriptions?.data?.find((item) => item?.status !== 'canceled')
+
+    if (!subscription?.id) {
+      return res.json({
+        has_active_subscription: false,
+        is_cancel_scheduled: false,
+        cancel_effective_at: null,
+        status: null
+      })
+    }
+
+    return res.json({
+      has_active_subscription: true,
+      is_cancel_scheduled: isCancelScheduled(subscription),
+      cancel_effective_at: scheduledCancelAt(subscription),
+      status: subscription.status ?? null
+    })
+  } catch (err) {
+    console.error('Paddle subscription status error:', err)
+    return res.status(500).json({ error: err.message || 'Failed to load subscription status' })
   }
 })
 

@@ -101,3 +101,12 @@ export async function cancelSubscription() {
   if (!res.ok) throw new Error(data.error || 'Failed to cancel subscription')
   return data
 }
+
+export async function getSubscriptionStatus() {
+  const res = await fetch('/api/paddle/subscription/status', {
+    headers: await authHeaders()
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to load subscription status')
+  return data
+}
