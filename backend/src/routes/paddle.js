@@ -1,0 +1,129 @@
+import { Router } from 'express'
+import crypto from 'crypto'
+import { requireAuth } from '../middleware/auth.js'
+import { supabase } from '../lib/supabase.js'
+
+export const router = Router()
+
+const PADDLE_API_URL = process.env.PADDLE_ENV === 'sandbox'
+  ? 'https://sandbox-api.paddle.com'
+  : 'https://api.paddle.com'
+
+// POST /paddle/checkout
+router.post('/checkout', requireAuth, async (req, res) => {
+  if (!process.env.PADDLE_API_KEY || !process.env.PADDLE_PRICE_ID) {
+    return res.status(503).json({ error: 'Payments not configured' })
+  }
+
+  const successUrl = `${process.env.FRONTEND_URL ?? 'http://localhost:5173'}?paddle_success=1`
+
+  try {
+    const response = await fetch(`${PADDLE_API_URL}/transactions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.PADDLE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        items: [{ price_id: process.env.PADDLE_PRICE_ID, quantity: 1 }],
+        customer: { email: req.user.email },
+        custom_data: { user_id: req.user.id },
+        checkout: { url: successUrl }
+      })
+    })
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      console.error('Paddle API error:', data)
+      return res.status(502).json({ error: 'Failed to create checkout' })
+    }
+
+    const checkoutUrl = data.data?.checkout?.url
+    if (!checkoutUrl) return res.status(502).json({ error: 'No checkout URL returned' })
+
+    res.json({ url: checkoutUrl })
+  } catch (err) {
+    console.error('Paddle checkout error:', err)
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+// POST /paddle/webhook
+router.post('/webhook', async (req, res) => {
+  const signature = req.headers['paddle-signature']
+  const secret = process.env.PADDLE_WEBHOOK_SECRET
+
+  if (secret) {
+    if (!signature) return res.status(400).json({ error: 'Missing signature' })
+
+    const [tsPart, h1Part] = signature.split(';')
+    const ts = tsPart?.replace('ts=', '')
+    const h1 = h1Part?.replace('h1=', '')
+
+    const signed = crypto
+      .createHmac('sha256', secret)
+      .update(`${ts}:${req.body.toString()}`)
+      .digest('hex')
+
+    if (signed !== h1) return res.status(401).json({ error: 'Invalid signature' })
+  }
+
+  let event
+  try {
+    event = JSON.parse(req.body.toString())
+  } catch {
+    return res.status(400).json({ error: 'Invalid JSON' })
+  }
+
+  const { event_type, data } = event
+
+  if (
+    event_type === 'subscription.activated' ||
+    event_type === 'subscription.updated'
+  ) {
+    const status = data?.status
+    if (status !== 'active') {
+      return res.json({ received: true })
+    }
+
+    const userId = await resolveUserId(data)
+    if (userId) {
+      await supabase.from('users').update({ plan: 'pro' }).eq('id', userId)
+    } else {
+      console.warn('Paddle webhook: could not resolve user_id for event', event_type)
+    }
+  }
+
+  if (event_type === 'subscription.canceled' || event_type === 'subscription.paused') {
+    const userId = await resolveUserId(data)
+    if (userId) {
+      await supabase.from('users').update({ plan: 'free' }).eq('id', userId)
+    }
+  }
+
+  res.json({ received: true })
+})
+
+// Resolve user_id from webhook payload with multiple fallbacks
+async function resolveUserId(data) {
+  // 1. custom_data on the subscription object
+  const fromCustomData = data?.custom_data?.user_id
+  if (fromCustomData) return fromCustomData
+
+  // 2. custom_data on the originating transaction (Paddle sometimes nests this)
+  const fromTransaction = data?.transaction?.custom_data?.user_id
+  if (fromTransaction) return fromTransaction
+
+  // 3. Fallback: look up by customer email
+  const email = data?.customer?.email ?? data?.billing_details?.email
+  if (!email) return null
+
+  const { data: user } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', email)
+    .single()
+
+  return user?.id ?? null
+}
